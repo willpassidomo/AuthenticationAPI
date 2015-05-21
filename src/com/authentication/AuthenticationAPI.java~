@@ -1,0 +1,742 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+package cscie97.asn4.squaredesk.authentication;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ *The AuthenticationAPI is used to track and validate user’s permissions for access. 
+ * The AuthenticationAPI may be extended for any service by creating a new instance 
+ * for the new service. Each instance tracks the users of a service, the defined roles 
+ * and which roles each user has been assigned, the defined permissions within each role 
+ * and valid authTokens. AuthenticationAPI provides methods for updating the assignment 
+ * of permissions and roles, creating and deleting users, roles, and permissions and 
+ * creating new authTokens. This class also supports the printing of an inventory of all 
+ * of its associations by employing the Visitor Pattern. 
+	In order to create a new instance to user AuthenticationAPI for your service, You 
+        * must first register yourself as a Root User by calling the static 
+        * newRootUser(String, String, UserDTO) method. If this returns true, then you have 
+        * successfully created a root user account, it returns false, it means you have selected 
+        * a duplicate username.  Once you have created your Root User account, you must call 
+        * RootUserLogin(String, String) which will return an AuthToken which is good for the 
+        * length of your session.
+	To create a new service, you may call the static method newAuthenticationAPIInstance(String, String), 
+        * passing in your authToken and the name of your service as parameters. The program will 
+        * automatically check that you have root user permission and create the new service instance. 
+        * To retrieve this instance, you will pass the same information to 
+        * getAuthenticationAPIInstance(String, String), which will return the instance. Instances 
+        * may only have one Root User who is able to access the instance.
+
+ * 
+ * @author willpassidomo
+ */
+public class AuthenticationAPI {
+    private static final AuthTokenGenerator apiTokenGen = new AuthTokenGenerator();
+    private static final List<Service> services = new ArrayList<>();
+    private static final HashMap<String, HashMap<String, User>> rootUsersPWtable = new HashMap<>();
+    private static final HashMap<User, ArrayList<AuthenticationAPI>> rootUserAss = new HashMap<>();
+    
+    private final User rootUser;
+    private final Service service;
+    
+    /***
+     * the only constructor for the AuthenticationAPI. called by static method newAuthenticationInstance
+     * @param user the Root user creating the instance
+     * @param service the service which will be employing the instance
+     */
+    
+    private AuthenticationAPI(User user, Service service) {
+        this.rootUser = user;
+        this.service = service;
+        if(!rootUserAss.containsKey(user)) {
+            rootUserAss.put(user, new ArrayList<AuthenticationAPI>());
+        }
+        rootUserAss.get(user).add(this);
+        services.add(service);
+    }
+    
+    /**
+     * Checks authToken for validity, and returns the instance of AuthenticationAPI 
+     * which corresponds to the serviceName parameter
+     * @param authToken a valid rootUser authToken
+     * @param name the name of the service 
+     * @return the AuthenticationAPI corresponding to the parameter "name"
+     */
+ 
+    public static AuthenticationAPI getAuthenticationInstance(String authToken, String name) {
+        try {
+            User user = apiTokenGen.checkToken(authToken);
+            ArrayList<AuthenticationAPI> list = rootUserAss.get(user);
+            for (AuthenticationAPI instance: list) {
+                if (instance.service.getName().trim().compareToIgnoreCase(name.trim()) == 0) {
+                    return instance;
+                }
+            }
+            throw new IllegalArgumentException("\""+name+" is not an existing AuthenticationInstance");
+        } catch (InvalidAccessTokenException | IllegalArgumentException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity, and removes the instance of AuthenticationAPI 
+     * which corresponds to the serviceName parameter
+     * @param authToken a valid rootUser authToken
+     * @param serviceName the name of the service whos instance is to be deleted 
+     */
+    
+    public static void deleteAuthenticationInstance(String authToken, String serviceName) {
+        try {
+            User user = apiTokenGen.checkToken(authToken);
+            ArrayList<AuthenticationAPI> list = rootUserAss.get(user);
+            AuthenticationAPI a = null;
+            for (AuthenticationAPI instance: list) {
+                if (instance.service.getName().equals(serviceName)) {
+                    a = instance;
+                }
+            }
+            if(a != null) {
+                rootUserAss.get(user).remove(a);
+            } else {
+                throw new IllegalArgumentException("Unable to delete. User is not Root User for specified service");
+            }
+        } catch (InvalidAccessTokenException | IllegalArgumentException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity and creates a new instance of AuthenticationAPI 
+     * with a new Service with the corresponding name and description to the serviceName parameter and serviceDescription parameter
+     * @param authToken a valid rootUser authToken
+     * @param serviceName the name of the service which will be employing the AuthenticationAPI instance
+     * @param serviceDescription a description of the the service which will be employing the AuthenticationAPI instance
+     * @return the newly created instance of AuthenticationAPI
+     */
+    public static AuthenticationAPI newAuthenticationInstance(String authToken, String serviceName, String serviceDescription) {
+        try {
+            User user = apiTokenGen.checkToken(authToken);
+            Service service =  Service.newService(serviceName, serviceDescription);
+            AuthenticationAPI newAuth = new AuthenticationAPI(user, service);
+            return newAuth;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Returns a list of all services the AuthenticationAPI is being used for 
+     * (all the different instances)
+     * @param authToken a valid rootUser authToken
+     * @return a list of Service objects
+     */
+    
+    public static List<Service> getServices(String authToken) {
+        try {
+            User user = apiTokenGen.checkToken(authToken);
+            return services;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Method for a rootUser of an AuthenticationAPI instance to login and return 
+     * an authToken which them may then use to fetch 1 or more of the AuthenticationAPI’s for which they are root users
+     * @param userName the username of the rootUser
+     * @param password the password of the rootUser
+     * @return a valid rootUser authToken
+     */
+    
+    public static String rootUserLogin(String userName, String password) {
+        if (rootUsersPWtable.containsKey(userName)) {
+            HashMap<String, User> table = rootUsersPWtable.get(userName);
+            if (table.containsKey(hashPassword(password))) {
+                User user = table.get(hashPassword(password));
+                return apiTokenGen.newAuthToken(user);
+            } 
+        }
+        throw new IllegalArgumentException("Incorrect Password and/or Username");
+    }
+    
+    /**
+     * Create a new rootuser login, returns an authToken which may be used to call newAuthenticationInstance()
+     * @param username the username of the rootUser
+     * @param password the password of the rootUser
+     * @return a valid rootUser authToken
+     */
+    public static String newRootUser(String username, String password) {
+        if(rootUsersPWtable.containsKey(username)) {
+            try {
+                throw new UserNameAlreadyExistsException(username);
+            } catch (UserNameAlreadyExistsException ex) {
+                System.out.println(ex.getMessage());
+                ex.printStackTrace();
+                return null;
+            }
+        } else {
+            User newUser = User.newUser(username, hashPassword(password));
+            HashMap<String,User> map = new HashMap<>();
+            map.put(hashPassword(password), newUser);
+            rootUsersPWtable.put(username, map);
+            return apiTokenGen.newAuthToken(newUser);
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser. Adds new User to the service. 
+     * New User has no permissions as default
+     * @param authToken a valid rootUser authToken
+     * @param userName the username of the user
+     * @param password the password of the user
+     * @return a valid service user authToken
+     */
+    
+    public String addUser(String authToken, String userName, String password) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = User.newUser(service, userName, hashPassword(password));
+            return user.getUserName();
+        } catch (UserNameAlreadyExistsException | InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * checks authToken for validity as RootUser. returns a list of all User instances
+     * created for the AuthenticationAPI instance's service
+     * @param authToken a valid rootUser authToken
+     * @return a list of all User's for service
+     */
+    public List<User> getUsers(String authToken) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            List<User> list = new ArrayList<>(service.getUsers().values());
+            Collections.sort(list);
+            return list;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser. Removes the specified user
+     * @param authToken a valid rootUser authToken
+     * @param userID the name of the user to be removed
+     */
+    
+    public void removeUser(String authToken, String userID) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            service.removeUser(userID);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();        
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser.  Replaces user’s username and password
+     * @param authToken a valid rootUser authToken
+     * @param userName the username of the User to be updated
+     * @param newUsername the new username
+     * @param newPassword the new password
+     */
+    
+    public void updateUserLogin(String authToken, String userName, String newUsername, String newPassword) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName);
+            user.setPassword(hashPassword(newPassword));      
+            user.setUserName(newUsername);
+        } catch (UserNameAlreadyExistsException | InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        } 
+    }
+    
+    /**
+     * Checks the authToken for validity as a RootUser. returns the roles associated
+     * with the User who has userName, userName
+     * @param authToken a valid rootUser authToken
+     * @param userName the username of the User in question
+     * @return a List object containing the User's roles
+     */
+    
+    public List<Role> getUserRoles(String authToken, String userName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName);       
+            return user.getRoles();
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, checks username and password 
+     * for match in service’s user table, returns authToken for User if found, 
+     * raises AuthenticationException if not found
+     * @param authToken a valid rootUser authToken
+     * @param userName the username of the User logging in
+     * @param password the password of the User logging in
+     * @return a valid user authToken for the User with name, userName
+     */
+    
+    public String logIn(String authToken, String userName, String password) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName, hashPassword(password));
+            return service.getAuthTokenGenerator().newAuthToken(user);
+        } catch (AuthenticationException | InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks rootAuthToken for validity as RootUser, checks usrAuthToken for 
+     * validity as service user token, then removes usrAuthToken from valid Tokens.
+     * @param rotAuthToken a valid rootUser authToken
+     * @param usrAuthToken a valid user authTokne
+     */
+    
+    public void logout(String rotAuthToken, String usrAuthToken) {
+        try {
+            apiTokenGen.checkToken(rotAuthToken);            
+            service.getAuthTokenGenerator().removeToken(usrAuthToken);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, adds Role instance corresponding 
+     * with roleName parameter to User corresponding with userName’s List of Roles
+     * @param authToken a valid rootUser authToken
+     * @param userName the userName of the User to be assigned a Role
+     * @param roleName the name of the Role to be assigned
+     */
+    public void assignRole(String authToken, String userName, String roleName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName);
+            user.addRole(service.getRole(roleName));
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, removes the Role instance 
+     * corresponding with roleName parameter from User corresponding with 
+     * userName’s List of Roles
+     * @param authToken a valid rootUser authToken
+     * @param userName the userName of the User for which a Role will be removed
+     * @param roleName the name of the Role to remove
+     */
+    
+    public void removeRole(String authToken,String userName, String roleName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName);
+            user.removeRole(roleName);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, Adds a new Role object with 
+     * the Entitlements listed in the entitlements parameter to the service. 
+     * Returns the role added
+     * @param authToken a valid rootUser authToken
+     * @param roleName the name of the new Role
+     * @param description the description of the new Role
+     * @param permissions the permission to be associated with the new Role
+     * @return the newly created Role
+     */
+    
+    public Role addRole(String authToken, String roleName, String description, List<Entitlement> permissions) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Role newRole = Role.newRole(service, roleName, description);
+            newRole.addPermission(permissions);
+            return newRole;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, Adds a new Role object with 
+     * no permission to the service. Returns the role Added
+     * @param authToken a valid rootUser authToken
+     * @param roleName the name of the new Role
+     * @param description the description of the new Role
+     * @return the newly create Role
+     */
+    
+    public Role addRole(String authToken, String roleName, String description) {
+        return this.addRole(authToken, roleName, description, new ArrayList<Entitlement>());
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, deletes the Role with the 
+     * specified UUID in the roleID parameter
+     * @param authToken a valid rootUser authToken
+     * @param roleID the name of the Role to be deleted
+     */
+    
+    public void deleteRole(String authToken, String roleID) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            service.deleteRole(roleID);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, replaces the name, 
+     * description and entitlements in the Role instance corresponding with 
+     * roleName with the parameters, newRoleName, description, and entitlements.
+     * Returns the update Role object
+     * @param authToken a valid rootUser authToken
+     * @param roleName the name of the Role to be updated
+     * @param newroleName the new name of the Role
+     * @param description the new description of the Role
+     * @param permissions a List of the Role's new Entitlements
+     * @return the updated Role
+     */
+    
+    public Role updateRole(String authToken, String roleName, String newroleName, String description, List<Entitlement> permissions) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Role role = service.getRole(roleName);
+            role.removePermissions();
+            role.addPermission(permissions);
+            role.setDescription(description);
+            role.setName(newroleName);
+            return role;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, adds Entitlement associated with
+     * the name, roleName to the Role associated with roleName, and returns the updated Role
+     * @param authToken a valid rootUser authToken
+     * @param roleName the name of the Role to be updated
+     * @param permissionName the name of the Permission to add to the Role
+     * @return the updated Role
+     */
+    
+    public Role addPermissionToRole(String authToken, String roleName, String permissionName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Role role = service.getRole(roleName);
+            Entitlement permission = service.getPermission(permissionName);
+            if (permission == null) {
+                permission = service.getRole(permissionName);
+            }
+            role.addPermission(permission);
+            return role;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks the authToken for validity as RootUser, returns the
+     * Roles associated with the service
+     * @param authToken a valid rootUser authToken
+     * @return a List of Roles associate with the service
+     */
+    
+    public List<Role> getRoles(String authToken) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            return service.getRoles();
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, creates a new Permission 
+     * object with the name, permissionName and with the description permissionDescrip. 
+     * Returns the new Permission
+     * @param authToken a valid rootUser authToken
+     * @param perName the name of the new Permission
+     * @param perDescription the description of the new Permission
+     * @return the newly created Permission object
+     */
+    
+    public Permission newPermission(String authToken, String perName, String perDescription) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            return Permission.newPermission(service, perName, perDescription);
+        } catch (InvalidAccessTokenException ex) {
+            Logger.getLogger(AuthenticationAPI.class.getName()).log(Level.SEVERE, null, ex);
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser., removes Entitlement associated 
+     * with entitlementName from role associated with roleName
+     * @param authToken a valid rootUser authToken
+     * @param roleID the name of the Role to have an entitlement removed
+     * @param permissionName the name of the Entitlement to remove
+     */
+    
+    public void removeEntitlement(String authToken, String roleID, String entitlementName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Role role = service.getRole(roleID);
+            role.removePermission(entitlementName);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, replaces the name, description 
+     * and permissions in the Permission instance corresponding with permissionName 
+     * with the parameters, newPerName, description, and permissions. Returns the update Role object
+     * @param authToken a valid rootUser authToken
+     * @param permissionName the name of the Permission to be updated
+     * @param newPerName the new name of the Permission
+     * @param description the new description of the Permission
+     * @return the updated Permission
+     */
+    
+    public Permission updatePermission(String authToken, String permissionName, String newPerName, String description) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Permission permission = service.getPermission(permissionName);
+            permission.setDescription(description);
+            permission.setName(newPerName);
+            return permission;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as a RootUser, returns a List of the Permissions
+     * associated with the service
+     * @param authToken a valid rootUser authToken
+     * @return a List of the Permissions associated with the service
+     */
+    
+    public List<Permission> getPermissions(String authToken) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            return service.getPermissions();
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, returns a List of the Permissions
+     * associate with the Role object who's name matched the parameter
+     * roleName
+     * @param authToken a valid rootUser authToken
+     * @param roleName the name of the Role who's Permissions will be returned
+     * @return a List of the Permissions of the role
+     */
+    
+    public List<Permission> getRolesPermissions(String authToken, String roleName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            Role role = service.getRole(roleName);
+            return role.getPermissions();
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, returns a List of the Roles
+     * associate with the User object who's name matched the parameter
+     * userName
+     * @param authToken a valid rootUser authToken
+     * @param userName the name of the User who's Roles will be returned
+     * @return 
+     */
+    
+    public List<Role> getUsersRoles(String authToken, String userName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            User user = service.getUser(userName);
+            return user.getRoles();
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, removes the permission 
+     * associated with the name permissionName.
+     * @param authToken a valid rootUser authToken
+     * @param permissionName the name of the permission to delete
+     */
+    
+    public void deletePermission(String authToken, String permissionName) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            service.removePermission(permissionName);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+        }
+    }
+    
+    /**
+     * Similar to checkAccess, but does not throw Exception, rather returns 
+     * boolean value. Checks authToken for validity as RootUser,  gains reference 
+     * to user and tests whether User has a Permission matching permission. 
+     * Returns true if authToken and rootAuthToken are valid and User has Permission 
+     * matching permission, returns false if any of the above is not true
+     * @param rootAuthToken a valid rootUser authToken
+     * @param authToken the users authToken
+     * @param permission the permission to check
+     * @return true if the User has the permission, false if they dont
+     */
+    
+    public boolean checkAccessBOOL(String rootAuthToken, String authToken, String permission) {
+        try {
+            apiTokenGen.checkToken(rootAuthToken);
+            User user = service.getAuthTokenGenerator().checkToken(authToken);
+            return user.hasPermission(permission);
+        } catch (AccessDeniedException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return false;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return false;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser, asses authToken as valid User 
+     * token if valid, gains reference to user and tests whether User has a 
+     * Permission matching permission. Throws InvalidAccessTokenException if 
+     * authToken or rootAuthToken is invalid. Throws AccessDeniedException if 
+     * User does not have Permission matching permission
+     * @param rootAuthToken a valid rootUser authToken
+     * @param authToken a valid user authToken
+     * @param permission the permission to check
+     * @throws InvalidAccessTokenException if the User's access token in not a valid token or expired
+     * @throws AccessDeniedException if the User's access token is valid, but 
+     * the User does not have the specified permission
+     */
+    
+    public void checkAccess(String rootAuthToken, String authToken, String permission) throws InvalidAccessTokenException, AccessDeniedException {
+            apiTokenGen.checkToken(rootAuthToken);
+            User user = service.getAuthTokenGenerator().checkToken(authToken);
+            user.hasPermission(permission);
+    }
+    
+    /**
+     * a test method to check if the token passed to the method is
+     * a valid token or not
+     * @param authToken the user's token to be checked
+     * @return ture if the token is valid, false if the token is a valid token or expired
+     */
+    
+    public boolean checkUserToken(String authToken) {
+        try {
+            service.getAuthTokenGenerator().checkToken(authToken);
+            return true;
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return false;
+        }
+    }
+    
+    /**
+     * Checks authToken for validity as RootUser,  retruns String representation 
+     * of all Users of service and their Roles, all Roles (w/description) of 
+     * service and their Permissions and all Permissions (w/description) of service
+     * @param authToken a valid rootUser authToken
+     * @return a String representation of the service's Inventory (Users, Roles and Permissions)
+     */
+    
+    public String getInventory(String authToken) {
+        try {
+            apiTokenGen.checkToken(authToken);
+            InventoryVisitor visitor = new InventoryVisitor();
+            return visitor.getInventory(service);
+        } catch (InvalidAccessTokenException ex) {
+            System.out.println(ex.getMessage());
+            ex.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * A basic hashing method which takes the parameter password and returns
+     * a hashed version of it
+     * @param password the password to be hashed
+     * @return the hashed password
+     */
+    
+    private static String hashPassword(String password) {
+        String p = password.hashCode()+"";
+        return p.hashCode()+"";
+    }
+}
